@@ -1,0 +1,48 @@
+name: questbuilders/gh_transfer_test
+on:
+  push:
+  workflow_dispatch:
+concurrency:
+  group: "${{ github.ref }}"
+  cancel-in-progress: true
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container:
+      image: node:latest
+    if: # Unable to map conditional expression to GitHub Actions equivalent
+#         ${{ github.ref }} == $CI_DEFAULT_BRANCH || ${{ github.ref }} =~ /^v\d+\.\d+\.\d+.*$/
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4.1.0
+      with:
+        fetch-depth: 20
+        lfs: true
+    - run: |
+        if [[ ! -f .npmrc ]]; then
+          echo 'No .npmrc found! Creating one now. Please review the following link for more information: https://docs.gitlab.com/ee/user/packages/npm_registry/index.html#project-level-npm-endpoint-1'
+          {
+            echo "@${{ github.repository_owner }}:registry=${{ github.api_url }}/projects/${{ github.repository }}/packages/npm/"
+            echo "${CI_API_V4_URL#http*:}/projects/${{ github.repository }}/packages/npm/:_authToken=\${{ github.token }}"
+          } >> .npmrc
+        fi
+    - run: echo "Created the following .npmrc:"; cat .npmrc
+    - run: NPM_PACKAGE_NAME=$(node -p "require('./package.json').name")
+    - run: NPM_PACKAGE_VERSION=$(node -p "require('./package.json').version")
+    - run: |
+        if [[ ! $NPM_PACKAGE_NAME =~ ^@${{ github.repository_owner }}/ ]]; then
+          echo "Invalid package scope! Packages must be scoped in the root namespace of the project, e.g. \"@${{ github.repository_owner }}/${{ github.event.repository.name }}\""
+          echo 'For more information, see https://docs.gitlab.com/ee/user/packages/npm_registry/#package-naming-convention'
+          exit 1
+        fi
+    - run: |
+        if [[ "$(npm view ${NPM_PACKAGE_NAME} versions)" != *"'${NPM_PACKAGE_VERSION}'"* ]]; then
+          if [[ -n "${SIGSTORE_ID_TOKEN}" ]]; then
+            npm publish --provenance
+          else
+            npm publish
+          fi
+          echo "Successfully published version ${NPM_PACKAGE_VERSION} of ${NPM_PACKAGE_NAME} to GitLab's NPM registry: ${{ github.server_url }}/${{ github.repository }}/-/packages"
+        else
+          echo "Version ${NPM_PACKAGE_VERSION} of ${NPM_PACKAGE_NAME} has already been published, so no new version has been published."
+        fi
